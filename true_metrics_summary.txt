@@ -1,0 +1,19 @@
+renv 1.3.1 was loaded from project library, but this project is configured to use renv 1.2.4.
+- Use `renv::record("renv@1.3.1")` to record renv 1.3.1 in the lockfile.
+- Use `renv::restore(packages = "renv")` to install renv 1.2.4 into the project library.
+- The project is out-of-sync -- use `renv::status()` for details.
+=============================================================
+--- 1. Extracting Training Metrics (R-squared & RMSE) ---
+=============================================================
+Running 5-fold CV to calculate formal error metrics (this will take ~30 seconds)...
+-> Cross-Validated RMSE: 0.1301
+-> Cross-Validated R-squared: 0.0190
+
+=============================================================
+--- 2. Extracting GSE3578 Paired Shift Statistics ---
+=============================================================
+Found 39 perfectly paired patient biopsies.
+-> Mean Pre-Treatment Score:  0.09000
+-> Mean Mid-Irradiation Score: 0.08213
+-> Paired Wilcoxon p-value: 3.87e-01
+=============================================================
