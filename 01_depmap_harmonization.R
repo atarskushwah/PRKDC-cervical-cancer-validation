@@ -1,83 +1,35 @@
-# scripts/01_depmap_harmonization.R
-library(tidyverse)
-library(data.table)
+# Release-matched DepMap harmonisation with explicit ProfileID-to-ModelID mapping.
+suppressPackageStartupMessages({library(tidyverse);library(data.table)})
+dir.create("data/processed",recursive=TRUE,showWarnings=FALSE)
+need<-c("Model.csv","OmicsProfiles.csv","CRISPRGeneEffect.csv","OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv")
+missing<-need[!file.exists(file.path("data/raw",need))];if(length(missing))stop("Missing: ",paste(missing,collapse=", "))
+read_dm<-function(file){as_tibble(fread(file.path("data/raw",file),data.table=FALSE,check.names=FALSE))}
+models<-read_dm("Model.csv");profiles<-read_dm("OmicsProfiles.csv")
+if("DepMap_ID"%in%names(models))models<-rename(models,ModelID=DepMap_ID)
+if(!"ModelID"%in%names(models))stop("Model.csv lacks ModelID/DepMap_ID.")
 
-# 1. Indestructible Base R Loader
-load_safe <- function(path, name) {
-  df <- fread(path, data.table = FALSE, check.names = TRUE)
-  
-  # Safely assign the primary ID without creating duplicates
-  if ("DepMap_ID" %in% names(df)) {
-    names(df)[names(df) == "DepMap_ID"] <- "ModelID"
-  } else if (!("ModelID" %in% names(df))) {
-    names(df)[1] <- "ModelID"
-  }
-  
-  # If any duplicate 'ModelID' columns were generated, destroy them
-  id_cols <- which(names(df) == "ModelID")
-  if (length(id_cols) > 1) {
-    df <- df[, -id_cols[-1]]
-  }
-  
-  cat(sprintf("[%s] Loaded %d cell lines\n", name, nrow(df)))
-  return(df)
+map_ids<-function(tab,label){
+  id<-names(tab)[1];names(tab)[1]<-"source_id"
+  if(all(grepl("^ACH-",tab$source_id)))return(rename(tab,ModelID=source_id))
+  pid<-intersect(names(profiles),c("ProfileID","ProfileId","profile_id"))[1]
+  mid<-intersect(names(profiles),c("ModelID","DepMap_ID"))[1]
+  if(is.na(pid)||is.na(mid))stop("OmicsProfiles.csv lacks ProfileID/ModelID mapping for ",label)
+  map<-profiles%>%transmute(source_id=as.character(.data[[pid]]),ModelID=as.character(.data[[mid]]))%>%distinct()
+  out<-left_join(tab%>%mutate(source_id=as.character(source_id)),map,by="source_id")
+  if(mean(is.na(out$ModelID))>.05)stop(label," mapping failure exceeds 5%.")
+  out%>%select(-source_id)%>%relocate(ModelID)
 }
+crispr<-map_ids(read_dm("CRISPRGeneEffect.csv"),"CRISPR");expr<-map_ids(read_dm("OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv"),"expression")
+prkdc_col<-function(x){hit<-grep("^PRKDC( |\\(|$)|5591",names(x),ignore.case=TRUE,value=TRUE);if(!length(hit))stop("PRKDC column not found.");hit[[1]]}
+outcome<-crispr%>%transmute(ModelID,PRKDC_effect=as.numeric(.data[[prkdc_col(crispr)]]))%>%drop_na()
+out<-outcome%>%left_join(models,by="ModelID")%>%left_join(expr,by="ModelID")
 
-models <- load_safe("data/raw/Model.csv", "Models")
-
-# 2. CRISPR (Outcome)
-crispr <- load_safe("data/raw/CRISPRGeneEffect.csv", "CRISPR")
-prkdc_idx <- grep("PRKDC|5591", names(crispr), ignore.case = TRUE)[1]
-
-crispr_out <- crispr[, c(1, prkdc_idx)]
-names(crispr_out)[2] <- "PRKDC_effect"
-
-# Strip ALL hidden characters/spaces before forcing to numeric
-crispr_out$PRKDC_effect <- as.numeric(gsub("[^0-9.-]", "", as.character(crispr_out$PRKDC_effect)))
-crispr_out <- crispr_out[!is.na(crispr_out$PRKDC_effect), ]
-cat("[CRISPR] Valid PRKDC scores retained:", nrow(crispr_out), "\n")
-
-# 3. Expression 
-expr <- load_safe("data/raw/OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv", "Expression")
-prkdc_exp_idx <- grep("PRKDC|5591", names(expr), ignore.case = TRUE)[1]
-names(expr)[prkdc_exp_idx] <- "PRKDC_expression"
-
-# 4. Copy Number
-cn <- load_safe("data/raw/OmicsCNGeneWGS.csv", "Copy Number")
-prkdc_cn_idx <- grep("PRKDC|5591", names(cn), ignore.case = TRUE)[1]
-names(cn)[prkdc_cn_idx] <- "PRKDC_CN"
-
-# 5. Mutations
-mut_raw <- load_safe("data/raw/OmicsSomaticMutations.csv", "Mutations")
-var_col <- grep("Variant|Classification|Consequence", names(mut_raw), ignore.case = TRUE, value = TRUE)[1]
-gene_col <- grep("Hugo|Gene", names(mut_raw), ignore.case = TRUE, value = TRUE)[1]
-
-mut_sub <- mut_raw[, c("ModelID", gene_col, var_col)]
-names(mut_sub) <- c("ModelID", "HugoSymbol", "VariantInfo")
-
-is_damaging <- grepl("frame|nonsense|splice|stop", mut_sub$VariantInfo, ignore.case = TRUE)
-mut_sub <- mut_sub[is_damaging, ]
-
-if (nrow(mut_sub) > 0) {
-  mut_sub$Mutated <- 1
-  mut_sub <- mut_sub[!duplicated(paste(mut_sub$ModelID, mut_sub$HugoSymbol)), ]
-  mutations <- pivot_wider(mut_sub[, c("ModelID", "HugoSymbol", "Mutated")],
-                           names_from = HugoSymbol,
-                           values_from = Mutated,
-                           values_fill = list(Mutated = 0))
-} else {
-  mutations <- data.frame(ModelID = character())
+# Optional release-matched sensitivity covariates; absence is recorded by preflight.
+cnfile<-"data/raw/OmicsCNGeneWGS.csv"
+if(file.exists(cnfile)){cn<-map_ids(read_dm(basename(cnfile)),"copy number");out<-out%>%left_join(cn%>%transmute(ModelID,PRKDC_cn=as.numeric(.data[[prkdc_col(cn)]])),by="ModelID")}
+for(kind in c("Hotspot","Damaging")){
+  f<-paste0("OmicsSomaticMutationsMatrix",kind,".csv");if(file.exists(file.path("data/raw",f))){m<-map_ids(read_dm(f),tolower(kind));col<-prkdc_col(m);v<-m%>%transmute(ModelID,value=as.numeric(.data[[col]]));names(v)[2]<-paste0("PRKDC_mut_",tolower(kind));out<-left_join(out,v,by="ModelID")}
 }
-cat("[Mutations] Damaging mutations parsed:", nrow(mutations), "\n")
-
-# 6. Harmonize
-cat("\n--- Starting Harmonization ---\n")
-depmap_cohort <- as_tibble(crispr_out) %>%
-  left_join(as_tibble(models), by = "ModelID") %>%
-  left_join(as_tibble(expr), by = "ModelID") %>%
-  left_join(as_tibble(cn), by = "ModelID", suffix = c("_exp", "_cn")) %>%
-  left_join(as_tibble(mutations), by = "ModelID", suffix = c("", "_mut"))
-
-cat("Harmonization complete. Final cell lines ready for modeling:", nrow(depmap_cohort), "\n")
-write_csv(depmap_cohort, "data/processed/01_harmonized_depmap_discovery.csv")
-cat("Saved to data/processed/01_harmonized_depmap_discovery.csv\n")
+if(anyDuplicated(out$ModelID))stop("Harmonisation produced duplicate ModelIDs.")
+write_csv(out,"data/processed/01_harmonized_depmap_discovery.csv")
+write_csv(tibble(models=nrow(out),expression_features=ncol(expr)-1),"data/processed/01_harmonization_summary.csv")

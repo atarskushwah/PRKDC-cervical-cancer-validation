@@ -1,0 +1,47 @@
+name: protocol-v1-reanalysis
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  static-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject known protocol violations
+        run: |
+          ! grep -R "penalty = 0.01\|penalty=0.01" --include='*.R' .
+          ! grep -R "rep(0, n_patients)\|rep(0,n_patients)" --include='*.R' .
+          ! grep -R "This proves the model" --include='*.R' .
+      - name: Check required workflow files
+        run: test -f 00_protocol_preflight.R && test -f run_protocol.R && test -f PROTOCOL_V1_REANALYSIS.md
+  r-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - name: Parse analysis scripts
+        shell: Rscript {0}
+        run: |
+          files <- c("00_protocol_preflight.R","01_depmap_harmonization.R","02_model_development.R","03_tcga_cesc_download.R","04_gse56363_response_validation.R","05_gse3578_paired_dynamics.R","05b_extract_manuscript_metrics.R","07_falsification_stress_tests.R","run_protocol.R")
+          for (f in files) parse(file=f)
+  data-aware-reanalysis:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - uses: r-lib/actions/setup-renv@v2
+      - name: Restore private data bundle
+        if: ${{ secrets.DATA_BUNDLE_URL != '' }}
+        run: curl -L "$DATA_BUNDLE_URL" -o data-bundle.tar.gz && tar -xzf data-bundle.tar.gz
+        env:
+          DATA_BUNDLE_URL: ${{ secrets.DATA_BUNDLE_URL }}
+      - name: Run protocol
+        run: Rscript run_protocol.R all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: protocol-v1-results
+          path: data/processed/
