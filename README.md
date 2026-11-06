@@ -1,23 +1,21 @@
-# PRKDC-cervical-cancer-validation
-# PRKDC CRISPR Dependency in Cervical Cancer
+# PRKDC dependency and NU7441 reproducibility in cervical cancer models
 
-This repository contains the computational analysis pipeline and figure-generation scripts for the manuscript: Running title: DNA-PK Dependency in Cervical Cancer 
-## Overview
-The study tests whether a transcriptomic model of DepMap PRKDC CRISPR dependency generalises across held-out cancer lineages. Clinical projection is conditional on successful nested validation; model collapse is retained and reported as a valid negative result.
+This repository contains the analysis code and aggregate outputs for the manuscript "Baseline Transcriptomics Does Not Predict PRKDC Dependency or NU7441 Sensitivity in Cervical Cancer Models."
 
-## Pipeline Execution
-The scripts are numbered in the exact order they should be executed to reproduce the findings:
-*   `00` to `01`: Data downloading and harmonization.
-*   `00_protocol_preflight.R`: machine-readable input audit; missing required data stop the run.
-*   `02`: nested lineage-grouped model development with an intercept-only comparator.
-*   `04` and `05`: patient-level clinical analyses used when the DepMap model selects the null.
-*   `06`: corrected lineage-adjusted transcriptomic correlations and GDSC cervical NU7441 reproducibility.
-*   `07`: Falsification and stress tests.
-*   `08` to `15`: Figure generation.
+## Study design
 
-## Environment Setup
-This project uses `renv` for R package management. Run `renv::restore()` in the project directory to install the exact package versions used in this analysis.
+The frozen harmonised cohort contains 1,139 models. All 18 cervical models were excluded before preprocessing and model development. The remaining 1,121 non-cervical models were analysed with nested lineage-grouped elastic-net regression and a fold-specific training-mean comparator. Clinical projection was permitted only if the candidate achieved positive pooled out-of-fold R-squared and lower RMSE than the null model. The candidate failed this gate, so patient projection was not an eligible analysis.
 
-Run `Rscript run_protocol.R core` for the DepMap decision or `Rscript run_protocol.R all` for eligible clinical analyses. See [PROTOCOL_V1_REANALYSIS.md](PROTOCOL_V1_REANALYSIS.md) for the frozen decision rules and remaining data boundaries.
+The completed orthogonal analyses comprise:
 
-The frozen historical analysis contains 1,139 models and an untouched 18-model cervical test set. It must not be combined with the separate DepMap 26Q1 coverage audit, in which cervical PRKDC measurements are absent. The legacy APOBR-led network is withdrawn because its target/gene labels are misaligned; `06_corrected_transcriptomic_pharmacology.py` generates the replacement FDR-controlled expression audit.
+- External evaluation in the untouched 18-model cervical cohort.
+- Lineage-adjusted transcriptome-wide association testing with false-discovery control.
+- Cross-screen comparison of NU7441 response in 14 cervical models shared by GDSC1 and GDSC2.
+
+The legacy APOBR-led network is withdrawn because its target and gene labels were misaligned. The frozen historical cohort is kept separate from the DepMap Public 26Q1 coverage audit.
+
+## Reproducibility
+
+Run `Rscript run_protocol.R core` for the DepMap decision. The corrected expression and pharmacology analysis is implemented in `06_corrected_transcriptomic_pharmacology.py`. GitHub Actions checks the committed decision record and GDSC reproducibility results on every push and pull request.
+
+Controlled source datasets are not redistributed. See `PROTOCOL_V1_REANALYSIS.md` for data boundaries, analysis gates and source requirements.
