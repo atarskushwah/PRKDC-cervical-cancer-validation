@@ -1,0 +1,9 @@
+{
+  "seed": 5591,
+  "crispr_file": "CRISPRGeneEffect.csv",
+  "expression_file": "OmicsExpressionTPMLogp1HumanProteinCodingGenes.csv",
+  "model_file": "Model.csv",
+  "outer_cv": "GroupKFold by OncotreeLineage",
+  "inner_cv": "GroupKFold by OncotreeLineage",
+  "decision_rule": "OOF R2 > 0 and RMSE < null RMSE"
+}

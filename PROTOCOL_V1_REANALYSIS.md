@@ -18,6 +18,8 @@ Can baseline transcriptomics predict PRKDC CRISPR dependency outside the lineage
 
 Retain the transcriptomic model only when lineage-held-out R² is positive and its RMSE is lower than the intercept-only comparator. Otherwise, freeze the null model, stop clinical projection, and report direct PRKDC/BARD1 expression analyses as exploratory rather than surrogate dependency validation.
 
+Clinical transfer additionally requires observed PRKDC CRISPR outcomes in cervical models. If the release contains no observed cervical PRKDC screens, cervical transferability is classified as not estimable rather than negative or positive.
+
 ## Missing-data boundaries
 
 GSE151666 outcomes must come from a de-identified author-provided mapping; HPV and stage do not reconstruct outcomes. Validated TCGA HPV calls are required for HPV-stratified claims. The 80-patient methylation set may be analysed only as an explicitly labelled subset until cohort completeness is verified. Release-matched DepMap copy-number and mutation matrices are sensitivity inputs and must not be substituted silently.

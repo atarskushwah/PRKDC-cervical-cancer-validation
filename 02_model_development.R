@@ -26,7 +26,12 @@ oof <- map2_dfr(outer$splits,outer$id,fit_fold); baseline <- mean(dat$PRKDC_effe
 rmse_model <- rmse_vec(oof$PRKDC_effect,oof$.pred); rmse_null <- rmse_vec(oof$PRKDC_effect,rep(baseline,nrow(oof)))
 r2_oof <- 1-sum((oof$PRKDC_effect-oof$.pred)^2)/sum((oof$PRKDC_effect-mean(oof$PRKDC_effect))^2)
 generalizable <- is.finite(r2_oof) && r2_oof>0 && rmse_model<rmse_null
-status <- tibble(n=nrow(dat),p=length(predictors),outer_folds=nrow(outer),oof_rmse=rmse_model,null_rmse=rmse_null,oof_r2=r2_oof,generalizable=generalizable,decision=if_else(generalizable,"retain_transcriptomic_model","select_null_model"))
+cervix_n <- sum(str_detect(as.character(dat$OncotreeLineage), regex("cerv", ignore_case=TRUE)))
+decision <- case_when(cervix_n==0 ~ "not_estimable_cervical_no_observed_prkdc_screens",
+                      generalizable ~ "retain_transcriptomic_model", TRUE ~ "select_null_model")
+status <- tibble(n=nrow(dat),p=length(predictors),outer_folds=nrow(outer),cervix_n=cervix_n,
+                 oof_rmse=rmse_model,null_rmse=rmse_null,oof_r2=r2_oof,generalizable=generalizable,
+                 clinical_transfer_eligible=generalizable && cervix_n>=5,decision=decision)
 write_csv(oof,"data/processed/02_nested_oof_predictions.csv"); write_csv(status,"data/processed/02_model_status.csv")
 if(generalizable){
   tuned <- tune_grid(wf,resamples=vfold_cv(dat %>% select(-ModelID,-OncotreeLineage),v=10,strata=PRKDC_effect),grid=grid,metrics=metric_set(rmse))

@@ -1,0 +1,2 @@
+n,p,lineages,outer_folds,oof_rmse,null_rmse,oof_mae,oof_r2,oof_r2_ci_low,oof_r2_ci_high,rmse_difference,rmse_difference_ci_low,rmse_difference_ci_high,generalizable,decision,crispr_total_models,prkdc_observed_models,prkdc_missing_fraction,cervix_n,clinical_transfer_eligible
+74,19216,17,5,0.4192483849310967,0.4192495121375,0.3124294599289848,-0.0446334277687776,-0.1234329522115074,-0.0191640910369972,-1.12720640338404e-06,-0.0019742169840561,0.0020087847144856,False,not_estimable_cervical_no_observed_prkdc_screens,1208,74,0.9387417218543046,0,False
