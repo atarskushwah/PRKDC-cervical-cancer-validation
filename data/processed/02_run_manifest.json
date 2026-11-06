@@ -1,0 +1,10 @@
+{
+  "seed": 5591,
+  "input_file": "01_harmonized_depmap_discovery.csv",
+  "eligible_predictors": "numeric columns ending _exp only",
+  "cervical_policy": "excluded from all discovery fitting and tuning",
+  "outer_cv": "GroupKFold by OncotreeLineage",
+  "inner_cv": "GroupKFold by OncotreeLineage",
+  "null_policy": "training-fold mean",
+  "decision_rule": "OOF R2 > 0 and candidate RMSE < fold-specific null RMSE"
+}

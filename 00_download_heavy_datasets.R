@@ -1,8 +1,8 @@
 library(Seurat)
 library(GEOquery)
 
-setwd("~/CERV-DPK_Multiomics")
 extracted_path <- "data/processed/GSE224327_raw"
+if (!dir.exists(extracted_path)) stop("Missing extracted 10X directory: ", extracted_path)
 
 cat("Loading 10X multi-sample single-cell data...\n")
 # Read10X automatically scans the directory for barcodes, features, and matrix files
