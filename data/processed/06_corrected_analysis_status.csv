@@ -1,2 +1,2 @@
-n_models,n_lineages,n_expression_features,n_fdr_significant,minimum_fdr,legacy_network_status
-1139,29,16312,0,0.4248060303870001,invalid_gene_alignment_do_not_use
+n_models,n_lineages,n_expression_features,n_testable_features,n_fdr_significant,minimum_fdr,legacy_network_status
+1139,29,19130,19123,0,0.4981034803694583,invalid_gene_alignment_do_not_use
