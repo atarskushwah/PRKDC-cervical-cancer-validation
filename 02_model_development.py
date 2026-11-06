@@ -1,11 +1,11 @@
-"""Protocol-compliant nested, lineage-grouped PRKDC dependency analysis.
+"""Frozen PRKDC transcriptomic validation with lineage-separated resampling.
 
-This Python implementation is used when the execution environment lacks R. It
-uses the same frozen decision rule as 02_model_development.R and writes the
-same core output tables.
+The cervical lineage is never used for feature selection, tuning, scaling,
+imputation, or fitting. Null predictions use each training partition's mean.
 """
 from pathlib import Path
 import json
+import os
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
@@ -17,106 +17,132 @@ from sklearn.preprocessing import StandardScaler
 
 SEED = 5591
 ROOT = Path(__file__).resolve().parent
-RAW = ROOT / "data" / "raw"
-OUT = ROOT / "data" / "processed"
+RAW, OUT = ROOT / "data" / "raw", ROOT / "data" / "processed"
 OUT.mkdir(parents=True, exist_ok=True)
 
-def find_one(stem: str) -> Path:
-    hits = sorted(RAW.glob(f"{stem}*.csv"))
-    if not hits:
-        raise FileNotFoundError(f"No input matching {stem}*.csv")
-    return hits[0]
 
-crispr_path = find_one("CRISPRGeneEffect")
-expr_path = find_one("OmicsExpressionTPMLogp1HumanProteinCodingGenes")
-model_path = find_one("Model")
+def load_harmonized():
+    supplied = os.environ.get("FROZEN_DISCOVERY_PATH")
+    paths = ([Path(supplied)] if supplied else []) + [
+        OUT / "01_harmonized_depmap_discovery.csv",
+        RAW / "01_harmonized_depmap_discovery.csv",
+    ]
+    path = next((p for p in paths if p.exists()), None)
+    if path is None:
+        raise FileNotFoundError("Frozen harmonized discovery table was not found")
+    dat = pd.read_csv(path, low_memory=False).drop_duplicates("ModelID")
+    required = {"ModelID", "OncotreeLineage", "PRKDC_effect"}
+    if not required.issubset(dat.columns):
+        raise ValueError(f"Missing columns: {sorted(required.difference(dat.columns))}")
+    features = [c for c in dat.columns if c.endswith("_exp") and
+                pd.api.types.is_numeric_dtype(dat[c])]
+    if len(features) < 100:
+        raise ValueError("Fewer than 100 numeric *_exp predictors found")
+    return dat.dropna(subset=["PRKDC_effect", "OncotreeLineage"]).copy(), path, features
 
-crispr = pd.read_csv(crispr_path, usecols=lambda c: c == "" or c.startswith("Unnamed:") or c == "PRKDC (5591)")
-crispr.columns = ["ModelID", "PRKDC_effect"]
-models = pd.read_csv(model_path, usecols=["ModelID", "OncotreeLineage"])
-expr = pd.read_csv(expr_path, low_memory=False)
-if "ModelID" not in expr.columns:
-    raise ValueError("Expression file lacks ModelID")
 
-metadata = {"", "SequencingID", "ModelConditionID", "ModelID", "IsDefaultEntryForMC", "IsDefaultEntryForModel"}
-features = [c for c in expr.columns if c not in metadata]
-dat = (crispr.merge(models, on="ModelID", how="inner")
-             .merge(expr[["ModelID"] + features], on="ModelID", how="inner")
-             .dropna(subset=["PRKDC_effect", "OncotreeLineage"])
-             .drop_duplicates("ModelID"))
-X = dat[features].apply(pd.to_numeric, errors="coerce").astype("float32")
-y = dat["PRKDC_effect"].to_numpy(dtype="float64")
-groups = dat["OncotreeLineage"].astype(str).to_numpy()
-
-outer = GroupKFold(n_splits=min(5, np.unique(groups).size))
-alphas = np.logspace(-4, 0, 8)
-param_grid = {"model__alpha": alphas, "model__l1_ratio": [0.25, 0.5, 0.75]}
-rows = []
-
-for fold, (train, test) in enumerate(outer.split(X, y, groups), start=1):
-    pipe = Pipeline([
+def make_pipeline():
+    return Pipeline([
         ("impute", SimpleImputer(strategy="median")),
         ("scale", StandardScaler()),
-        ("model", ElasticNet(max_iter=10000, selection="cyclic", random_state=SEED)),
+        ("model", ElasticNet(max_iter=20000, random_state=SEED, tol=1e-4)),
     ])
+
+
+dat, input_path, features = load_harmonized()
+is_cervix = dat.OncotreeLineage.astype(str).str.contains("cerv", case=False, na=False)
+discovery = dat.loc[~is_cervix].reset_index(drop=True)
+cervical = dat.loc[is_cervix].reset_index(drop=True)
+X = discovery[features].astype("float32")
+y = discovery.PRKDC_effect.to_numpy(float)
+groups = discovery.OncotreeLineage.astype(str).to_numpy()
+
+outer = GroupKFold(n_splits=min(5, np.unique(groups).size))
+grid = {"model__alpha": np.logspace(-4, 0, 8),
+        "model__l1_ratio": [0.25, 0.5, 0.75]}
+rows = []
+for fold, (train, test) in enumerate(outer.split(X, y, groups), 1):
     inner_groups = groups[train]
     inner = GroupKFold(n_splits=min(3, np.unique(inner_groups).size))
-    search = GridSearchCV(pipe, param_grid, scoring="neg_root_mean_squared_error",
-                          cv=inner, n_jobs=-1, refit=True, error_score="raise")
+    search = GridSearchCV(make_pipeline(), grid,
+                          scoring="neg_root_mean_squared_error", cv=inner,
+                          n_jobs=-1, refit=True, error_score="raise")
     search.fit(X.iloc[train], y[train], groups=inner_groups)
-    pred = search.predict(X.iloc[test])
-    null_pred = np.repeat(y[train].mean(), len(test))
-    for idx, p, n in zip(test, pred, null_pred):
-        rows.append({"ModelID": dat.iloc[idx]["ModelID"], "OncotreeLineage": groups[idx],
-                     "PRKDC_effect": y[idx], ".pred": p, ".null_pred": n,
-                     "outer_fold": fold, "penalty": search.best_params_["model__alpha"],
+    candidate = search.predict(X.iloc[test])
+    null = np.repeat(y[train].mean(), len(test))
+    for idx, pred, null_pred in zip(test, candidate, null):
+        rows.append({"ModelID": discovery.iloc[idx].ModelID,
+                     "OncotreeLineage": groups[idx],
+                     "PRKDC_effect": y[idx], ".candidate_pred": pred,
+                     ".null_pred": null_pred, "outer_fold": fold,
+                     "penalty": search.best_params_["model__alpha"],
                      "mixture": search.best_params_["model__l1_ratio"]})
 
 oof = pd.DataFrame(rows)
-rmse = mean_squared_error(oof.PRKDC_effect, oof[".pred"]) ** 0.5
-null_rmse = mean_squared_error(oof.PRKDC_effect, oof[".null_pred"]) ** 0.5
-r2 = r2_score(oof.PRKDC_effect, oof[".pred"])
-mae = mean_absolute_error(oof.PRKDC_effect, oof[".pred"])
+rmse = mean_squared_error(oof.PRKDC_effect, oof[".candidate_pred"]) ** .5
+null_rmse = mean_squared_error(oof.PRKDC_effect, oof[".null_pred"]) ** .5
+r2 = r2_score(oof.PRKDC_effect, oof[".candidate_pred"])
+generalizable = bool(np.isfinite(r2) and r2 > 0 and rmse < null_rmse)
+oof[".selected_pred"] = oof[".candidate_pred"] if generalizable else oof[".null_pred"]
 
-rng = np.random.default_rng(SEED)
-boot = []
+# Candidate predictions are retained for an auditable external falsification
+# test. The selected prediction remains the null when the frozen rule fails.
+final_cv = GroupKFold(n_splits=min(5, np.unique(groups).size))
+final_search = GridSearchCV(make_pipeline(), grid,
+                            scoring="neg_root_mean_squared_error", cv=final_cv,
+                            n_jobs=-1, refit=True, error_score="raise")
+final_search.fit(X, y, groups=groups)
+cervical_out = cervical[["ModelID", "OncotreeLineage", "PRKDC_effect"]].copy()
+if len(cervical_out):
+    cervical_out[".candidate_pred"] = final_search.predict(cervical[features].astype("float32"))
+    cervical_out[".null_pred"] = y.mean()
+    cervical_out[".selected_pred"] = (cervical_out[".candidate_pred"] if generalizable
+                                      else cervical_out[".null_pred"])
+    cerv_r2 = r2_score(cervical_out.PRKDC_effect, cervical_out[".candidate_pred"])
+    cerv_rmse = mean_squared_error(cervical_out.PRKDC_effect,
+                                   cervical_out[".candidate_pred"]) ** .5
+    cerv_null = mean_squared_error(cervical_out.PRKDC_effect,
+                                   cervical_out[".null_pred"]) ** .5
+else:
+    cerv_r2 = cerv_rmse = cerv_null = np.nan
+
+rng, boot = np.random.default_rng(SEED), []
 for _ in range(2000):
     i = rng.integers(0, len(oof), len(oof))
-    yy = oof.PRKDC_effect.to_numpy()[i]
-    pp = oof[".pred"].to_numpy()[i]
-    nn = oof[".null_pred"].to_numpy()[i]
-    boot.append((r2_score(yy, pp), mean_squared_error(yy, pp) ** .5 - mean_squared_error(yy, nn) ** .5))
+    yy, pp, nn = (oof.PRKDC_effect.to_numpy()[i],
+                  oof[".candidate_pred"].to_numpy()[i],
+                  oof[".null_pred"].to_numpy()[i])
+    boot.append((r2_score(yy, pp), mean_squared_error(yy, pp) ** .5 -
+                 mean_squared_error(yy, nn) ** .5))
 boot = np.asarray(boot)
-generalizable = bool(np.isfinite(r2) and r2 > 0 and rmse < null_rmse)
-cervix_n = int((np.char.find(np.char.lower(groups.astype(str)), "cerv") >= 0).sum())
-# Cervical transfer cannot be evaluated if the outcome matrix contains no
-# cervical models, irrespective of pan-lineage prediction metrics.
-clinical_transfer_eligible = bool(generalizable and cervix_n >= 5)
-if cervix_n == 0:
-    decision = "not_estimable_cervical_no_observed_prkdc_screens"
-elif not generalizable:
-    decision = "select_null_model"
-else:
-    decision = "retain_transcriptomic_model"
 status = pd.DataFrame([{
-    "n": len(dat), "p": len(features), "lineages": np.unique(groups).size,
-    "crispr_total_models": len(crispr), "prkdc_observed_models": int(crispr.PRKDC_effect.notna().sum()),
-    "prkdc_missing_fraction": float(crispr.PRKDC_effect.isna().mean()), "cervix_n": cervix_n,
-    "outer_folds": outer.n_splits, "oof_rmse": rmse, "null_rmse": null_rmse,
-    "oof_mae": mae, "oof_r2": r2,
+    "n_total": len(dat), "n_discovery": len(discovery),
+    "n_cervical_holdout": len(cervical), "p_expression": len(features),
+    "discovery_lineages": np.unique(groups).size, "outer_folds": outer.n_splits,
+    "oof_candidate_rmse": rmse, "oof_null_rmse": null_rmse,
+    "oof_candidate_r2": r2,
+    "oof_candidate_mae": mean_absolute_error(oof.PRKDC_effect, oof[".candidate_pred"]),
     "oof_r2_ci_low": np.nanpercentile(boot[:, 0], 2.5),
     "oof_r2_ci_high": np.nanpercentile(boot[:, 0], 97.5),
-    "rmse_difference": rmse-null_rmse,
+    "rmse_difference": rmse - null_rmse,
     "rmse_difference_ci_low": np.nanpercentile(boot[:, 1], 2.5),
     "rmse_difference_ci_high": np.nanpercentile(boot[:, 1], 97.5),
-    "generalizable": generalizable, "clinical_transfer_eligible": clinical_transfer_eligible,
-    "decision": decision,
+    "generalizable": generalizable,
+    "decision": "retain_transcriptomic_model" if generalizable else "select_null_model",
+    "cervical_candidate_rmse": cerv_rmse,
+    "cervical_null_rmse": cerv_null,
+    "cervical_candidate_r2": cerv_r2,
 }])
 oof.to_csv(OUT / "02_nested_oof_predictions.csv", index=False)
+cervical_out.to_csv(OUT / "02_cervical_holdout_predictions.csv", index=False)
 status.to_csv(OUT / "02_model_status.csv", index=False)
 (OUT / "02_run_manifest.json").write_text(json.dumps({
-    "seed": SEED, "crispr_file": crispr_path.name, "expression_file": expr_path.name,
-    "model_file": model_path.name, "outer_cv": "GroupKFold by OncotreeLineage",
-    "inner_cv": "GroupKFold by OncotreeLineage", "decision_rule": "OOF R2 > 0 and RMSE < null RMSE"
+    "seed": SEED, "input_file": input_path.name,
+    "eligible_predictors": "numeric columns ending _exp only",
+    "cervical_policy": "excluded from all discovery fitting and tuning",
+    "outer_cv": "GroupKFold by OncotreeLineage",
+    "inner_cv": "GroupKFold by OncotreeLineage",
+    "null_policy": "training-fold mean",
+    "decision_rule": "OOF R2 > 0 and candidate RMSE < fold-specific null RMSE",
 }, indent=2))
 print(status.to_string(index=False))
